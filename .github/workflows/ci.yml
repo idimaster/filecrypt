@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # Keep the minimum minor version aligned with go.mod.
+        go: ['1.26.x', stable]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [[ -n "$unformatted" ]]; then
+            printf 'Run gofmt on:\n%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Verify dependencies
+        run: go mod verify
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Race detector
+        run: go test -race ./...
+      - name: Fuzz smoke tests
+        if: runner.os == 'Linux' && matrix.go == 'stable'
+        run: |
+          go test ./internal/filecrypt -run='^$' -fuzz='^FuzzDecrypt$' -fuzztime=10s -parallel=2
+          go test ./internal/filecrypt -run='^$' -fuzz='^FuzzParse$' -fuzztime=10s -parallel=2
+      - name: CLI smoke test
+        run: sh scripts/smoke.sh
+

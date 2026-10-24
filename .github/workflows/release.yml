@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    name: Release checks
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    name: Package binaries
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache-dependency-path: go.sum
+      - name: Build release archives and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/package-release.sh "$RELEASE_TAG"
+      - name: Smoke-test packaged Linux binary
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir "$RUNNER_TEMP/release-smoke"
+          tar -xzf "dist/filecrypt_${RELEASE_TAG}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/release-smoke"
+          sh scripts/smoke.sh "$RUNNER_TEMP/release-smoke/filecrypt"
+      - name: Store release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: dist
+      - name: Verify checksums
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Publish release with all assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          # Retry incomplete drafts, but never replace a published release.
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > "$RUNNER_TEMP/release-is-draft"; then
+            if [[ $(cat "$RUNNER_TEMP/release-is-draft") != true ]]; then
+              printf 'Release %s is already published; use a new version tag.\n' "$RELEASE_TAG" >&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --generate-notes --title "$RELEASE_TAG"
+          fi
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false
+          fi
+
