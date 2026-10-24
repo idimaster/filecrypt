@@ -2,10 +2,18 @@
 set -eu
 
 # Run from the repository root. All credentials and payloads are synthetic.
+if [ "$#" -gt 1 ]; then
+  printf 'Usage: sh scripts/smoke.sh [FILECRYPT_BINARY]\n' >&2
+  exit 2
+fi
 smoke_dir=$(mktemp -d "${TMPDIR:-/tmp}/filecrypt-smoke.XXXXXX")
 trap 'rm -rf "$smoke_dir"' EXIT HUP INT TERM
 
-go build -o "$smoke_dir/filecrypt" ./cmd/filecrypt
+if [ "$#" -eq 1 ]; then
+  cp "$1" "$smoke_dir/filecrypt"
+else
+  go build -o "$smoke_dir/filecrypt" ./cmd/filecrypt
+fi
 printf 'synthetic plaintext\000 with unicode π\n' > "$smoke_dir/input"
 "$smoke_dir/filecrypt" keygen --out "$smoke_dir/key"
 "$smoke_dir/filecrypt" encrypt --in "$smoke_dir/input" --out "$smoke_dir/encrypted" --key-file "$smoke_dir/key"

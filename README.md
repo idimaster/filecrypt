@@ -180,3 +180,46 @@ The smoke script builds a temporary binary and uses disposable synthetic
 credentials to verify raw-key and password round trips, exact byte comparison,
 tampering rejection, and existing-output preservation. It removes its temporary
 directory on exit. Run race tests on a Go platform with race-detector support.
+
+## GitHub CI and releases
+
+[CI](.github/workflows/ci.yml) runs on branch pushes, pull requests, and manual
+dispatches. It checks formatting, verifies modules, builds, runs vet, unit and
+race tests, and exercises the CLI on Linux and macOS with Go 1.26.x and the
+latest stable Go release. The Linux/stable job also runs both 10-second fuzz
+smoke tests. Keep the minimum CI Go version aligned with `go.mod`.
+
+[Release](.github/workflows/release.yml) runs when a version tag is pushed.
+It first runs the same complete CI suite against the tagged commit, then
+cross-compiles CGO-free Linux and macOS binaries for AMD64 and ARM64, packages
+them with the README, license, and format specification, and smoke-tests the
+packaged Linux/AMD64 binary. The four `.tar.gz` archives and `SHA256SUMS` are
+retained as workflow artifacts for seven days and uploaded to GitHub Releases.
+
+After committing and pushing these workflows and the desired source changes,
+publish a release with a new tag:
+
+```sh
+git tag -a v1.0.0 -m 'Release v1.0.0'
+git push origin v1.0.0
+```
+
+Use a tag such as `v1.1.0-rc.1` to publish a prerelease without marking it latest.
+Tags must match `vMAJOR.MINOR.PATCH` with an optional prerelease suffix. No
+personal access token is needed: only the publishing job receives
+`contents: write` through GitHub's built-in token. Repository or organization
+policy must allow that permission. The publisher verifies checksums, uploads
+all assets to a draft, then publishes it. A failed draft can be resumed by
+rerunning the workflow; an already-published release is never overwritten.
+
+For local packaging and verification, use a new output directory:
+
+```sh
+bash scripts/package-release.sh v1.0.0
+(cd dist && shasum -a 256 --check SHA256SUMS)
+```
+
+For example, `filecrypt_v1.0.0_darwin_arm64.tar.gz` is for Apple Silicon Macs;
+`filecrypt_v1.0.0_linux_amd64.tar.gz` is for AMD64 Linux. Verify downloaded
+archives against `SHA256SUMS` before extracting. Checksums detect mismatched
+downloads; the release binaries are not signed or notarized.
